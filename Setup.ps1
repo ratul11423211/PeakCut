@@ -51,23 +51,12 @@ if (-not $Source -or -not (Test-Path (Join-Path $Source.FullName "studio\server.
     throw "The downloaded PeakCut source did not look complete."
 }
 
-if (Test-Path $InstallDir) {
-    $DataDir = Join-Path $InstallDir "data"
-    $KeepData = Join-Path $env:TEMP "peakcut-data-backup"
-    if (Test-Path $DataDir) {
-        if (Test-Path $KeepData) { Remove-Item $KeepData -Recurse -Force }
-        Copy-Item $DataDir $KeepData -Recurse
-    }
-    Remove-Item $InstallDir -Recurse -Force
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    if (Test-Path $KeepData) {
-        Copy-Item $KeepData $DataDir -Recurse
-        Remove-Item $KeepData -Recurse -Force
-    }
-} else {
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+# Overlay application files instead of deleting the install folder. This preserves data/, .env,
+# storage.json, secrets/ and any other local settings during a repair or upgrade.
+Get-ChildItem -LiteralPath $Source.FullName -Force | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $InstallDir -Recurse -Force
 }
-Copy-Item (Join-Path $Source.FullName "*") $InstallDir -Recurse -Force
 
 $VenvPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $VenvPython)) {
