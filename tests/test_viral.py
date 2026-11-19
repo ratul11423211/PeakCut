@@ -1,5 +1,8 @@
 """Tests for evidence-based clip ranking."""
+import sys
 import unittest
+
+sys.path.insert(0, ".")
 
 from studio.viral import evidence_score
 
