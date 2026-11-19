@@ -20,6 +20,10 @@ class ViralScoreTests(unittest.TestCase):
         energetic = evidence_score(clip, words, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4])
         self.assertGreater(energetic, quiet)
 
+    def test_zero_editorial_score_is_not_treated_as_missing(self):
+        score = evidence_score({"start": 0, "end": 10, "score": 0}, [], [0] * 20)
+        self.assertLessEqual(score, 5)
+
     def test_empty_inputs_are_safe(self):
         self.assertIsInstance(evidence_score({"start": 0, "end": 8}, [], []), int)
 
