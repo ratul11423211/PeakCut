@@ -1,0 +1,15 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+if not exist ".venv\Scripts\python.exe" (
+  echo PeakCut is not installed yet. Run Setup.ps1 first.
+  pause
+  exit /b 1
+)
+start "" http://127.0.0.1:8765
+".venv\Scripts\python.exe" -m studio.server
+if errorlevel 1 (
+  echo.
+  echo PeakCut stopped because of an error. Read the message above.
+  pause
+)
