@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 
-from . import ai, config, games, usage, roman
+from . import ai, config, games, usage, roman, viral
 
 WINDOW_SEC, OVERLAP_SEC = 15 * 60, 60
 
@@ -307,7 +307,9 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
             continue
         if _overlaps(s, e, clips):
             continue  # overlaps a better clip
-        clips.append(_tidy(c, s, e, game))
+        clean = _tidy(c, s, e, game)
+        clean["score"] = viral.evidence_score(clean, words, z)
+        clips.append(clean)
         if len(clips) >= max_clips:
             break
     clips.sort(key=lambda c: c["start"])
