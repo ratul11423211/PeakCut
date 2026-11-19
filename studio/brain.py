@@ -300,15 +300,19 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
     if not used_model:
         found = fallback_by_loudness(db, words, max_clips, max_len, duration)
         note = "The AI was unavailable, so clips were picked by loudness only."
-    clips = []
-    for c in sorted(found, key=lambda c: -_num(c.get("score"))):
+    ranked = []
+    for c in found:
         s, e = _snap(c, lines, words, min_len, max_len, duration)
         if e - s < min(min_len, duration) - 1:
             continue
-        if _overlaps(s, e, clips):
-            continue  # overlaps a better clip
         clean = _tidy(c, s, e, game)
         clean["score"] = viral.evidence_score(clean, words, z)
+        ranked.append(clean)
+    # Resolve overlaps only after combining editorial and measurable evidence.
+    clips = []
+    for clean in sorted(ranked, key=lambda c: -_num(c.get("score"))):
+        if _overlaps(clean["start"], clean["end"], clips):
+            continue
         clips.append(clean)
         if len(clips) >= max_clips:
             break
@@ -326,13 +330,18 @@ def find_live_clips(words, z, now, chat=None, title="", uploader="", min_len=15,
               + LIVE_NOTE.format(now=now)
               + RULES.format(min_len=min_len, max_len=max_len, transcript=_fmt(lines)))
     out, _model, spent = ask_ai(prompt, purpose="Live check")
-    clips = []
-    for c in sorted((c for c in out if isinstance(c, dict)), key=lambda c: -_num(c.get("score"))):
+    ranked = []
+    for c in (c for c in out if isinstance(c, dict)):
         s, e = _snap(c, lines, words, min_len, max_len, now)
-        if e - s < min_len - 1 or _overlaps(s, e, list(existing) + clips):
+        if e - s < min_len - 1:
             continue
         clean = _tidy(c, s, e, game)
         clean["score"] = viral.evidence_score(clean, words, z)
+        ranked.append(clean)
+    clips = []
+    for clean in sorted(ranked, key=lambda c: -_num(c.get("score"))):
+        if _overlaps(clean["start"], clean["end"], list(existing) + clips):
+            continue
         clips.append(clean)
     return clips, spent
 
