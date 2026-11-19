@@ -15,7 +15,8 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def evidence_score(clip: dict, words: list, loudness_z) -> int:
     """Return a 0-100 score using editorial score, audio peaks and speech coverage."""
-    editorial = _clamp(float(clip.get("score", 50) or 50), 0, 100)
+    raw_score = clip.get("score", 50)
+    editorial = _clamp(float(50 if raw_score is None else raw_score), 0, 100)
     start = max(0.0, float(clip.get("start", 0) or 0))
     end = max(start, float(clip.get("end", start) or start))
     duration = max(1.0, end - start)
