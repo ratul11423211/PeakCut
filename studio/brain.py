@@ -371,6 +371,52 @@ def describe(text, title="", uploader="", game=None, timeout=None):
         return blank
 
 
+
+def refine_hooks_with_frame(clip, jpeg: bytes, transcript: str, game=None, timeout=None):
+    """Use one sampled video frame to add visual context and improve hook options.
+
+    This is a single-frame assist, not continuous video understanding. If the configured model cannot
+    inspect images, the existing transcript-based hooks are left untouched.
+    """
+    if not jpeg:
+        return 0
+    prompt = (
+        "You are improving short-form stream clip hooks. Inspect this sampled frame and the transcript. "
+        "Do not assume motion or events that a single frame cannot prove. Return one JSON object with "
+        "visual_context (one concise factual sentence) and hook_options (up to five short, truthful hooks, "
+        "maximum five words each, all caps). Hooks must reflect both the visible context and the spoken "
+        "moment where possible. Never invent a win, loss, danger, prize, or reaction.\n"
+        f"Game: {_safe(game, 60) or 'unknown'}\n"
+        f"Transcript: {_safe(transcript, 2500)}\n"
+        f"Current hook: {_safe(clip.get('hook'), 80)}"
+    )
+    try:
+        answer, sent, wrote = ai.see(prompt, jpeg, timeout)
+        if not answer:
+            return 0
+        usage.record(sent, wrote, "Live: visual hook assist")
+        match = re.search(r"\{.*\}", answer, re.S)
+        data = json.loads(match.group(0)) if match else {}
+        context = _text(data.get("visual_context"), 180)
+        hooks = data.get("hook_options") if isinstance(data.get("hook_options"), list) else []
+        cleaned = []
+        for value in [clip.get("hook", "")] + hooks:
+            hook = roman.to_roman(_text(value, 60)).upper()
+            hook = re.sub(r"\s+", " ", hook).strip()
+            if hook and hook not in cleaned:
+                cleaned.append(hook)
+            if len(cleaned) == 5:
+                break
+        if context:
+            clip["visual_context"] = context
+        if cleaned:
+            clip["hook_options"] = cleaned
+            clip["hook"] = cleaned[0]
+        return sent + wrote
+    except Exception:  # noqa: BLE001 - vision is an optional enhancement, never a reason to lose a clip
+        return 0
+
+
 # ---------------------------------------------------------------- live: two judges that never see each other's input
 TRANSCRIPT_JUDGE = """You are a clip scout for short-form gaming and streaming videos (YouTube Shorts, Reels, TikTok).
 You only get the WORDS spoken on a live stream: a timestamped transcript, each line starting with [seconds].
