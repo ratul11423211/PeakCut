@@ -331,7 +331,9 @@ def find_live_clips(words, z, now, chat=None, title="", uploader="", min_len=15,
         s, e = _snap(c, lines, words, min_len, max_len, now)
         if e - s < min_len - 1 or _overlaps(s, e, list(existing) + clips):
             continue
-        clips.append(_tidy(c, s, e, game))
+        clean = _tidy(c, s, e, game)
+        clean["score"] = viral.evidence_score(clean, words, z)
+        clips.append(clean)
     return clips, spent
 
 
