@@ -2,8 +2,7 @@
 
 ## Install
 1. Download this repository ZIP and extract it.
-2. Right-click `Setup.ps1` and choose **Run with PowerShell**. If Windows blocks the script, open PowerShell in this folder and run:
-   `powershell -ExecutionPolicy Bypass -File .\Setup.ps1`
+2. Double-click `Install PeakCut.bat` and follow the setup window. It runs the PowerShell installer with a temporary per-process permission; it does not change your machine-wide execution policy.
 3. Setup installs the app under `%LOCALAPPDATA%\PeakCut`, prepares its Python environment and creates a **PeakCut** desktop shortcut.
 4. Double-click the shortcut. PeakCut opens in your browser at http://127.0.0.1:8765.
 
