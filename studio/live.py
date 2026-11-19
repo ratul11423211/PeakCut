@@ -444,6 +444,24 @@ class Session:
             self.last_spike = n
             self.spikes += 1
 
+    def _frame_at(self, stream_second):
+        """Extract one JPEG from the rolling buffer at a stream timestamp."""
+        with self.lock:
+            segment = next((s for s in self.segments if s[1] <= stream_second <= s[2] and s[0].exists()), None)
+        if not segment:
+            return None
+        path, start, _end = segment
+        relative = max(0.0, stream_second - start)
+        try:
+            proc = subprocess.run(
+                ["ffmpeg", "-v", "error", "-ss", f"{relative:.2f}", "-i", str(path),
+                 "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "5",
+                 "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
+                capture_output=True, timeout=12)
+            return proc.stdout if proc.returncode == 0 and proc.stdout else None
+        except Exception:  # noqa: BLE001 - a missed frame must not interrupt recording
+            return None
+
     def _ai_check(self, window=None, why=None):
         """Judge 1 reads only the words. If it finds a moment, judge 2 reads only the loudness and chat activity
         for the same stretch, without seeing the words. A clip is made when both say yes (or as set in Setup)."""
@@ -481,6 +499,17 @@ class Session:
         verdict["transcript"] = max((c["score"] for c in cands), default=0)
         if not keep:
             return self._verdict(verdict, "Words judge: nothing clip-worthy")
+        # A single frame near each candidate's loudest second gives the hook writer visual context.
+        # Recording and transcript analysis continue if frame extraction or vision fails.
+        for candidate in keep:
+            a, b = max(0, int(candidate["start"])), min(len(self.db), int(candidate["end"]) + 1)
+            peak = max(range(a, b), key=lambda i: self.db[i]) if b > a else int(candidate["start"])
+            frame = self._frame_at(float(peak))
+            if frame:
+                words_text = " ".join(w["w"] for w in win if candidate["start"] <= w["s"] <= candidate["end"])
+                spent = brain.refine_hooks_with_frame(candidate, frame, words_text, self._game(),
+                                                       timeout=config.LIVE_AI_TIMEOUT)
+                self.tokens += spent
         z = brain.loud_zscore(np.array(self.db, dtype=np.float32))
         lo, hi = int(ws), int(now) + 1
         people = self.chat_people()
