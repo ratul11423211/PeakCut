@@ -1,0 +1,27 @@
+name: PeakCut tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - viral-radar/autonomous-live
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install Python packages
+        run: python -m pip install -r requirements.txt
+      - name: Run application regression suite
+        run: python tests/run.py
+      - name: Run hook metadata regression tests
+        run: python -m unittest tests.test_brain_hooks
