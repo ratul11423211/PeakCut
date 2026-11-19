@@ -21,6 +21,7 @@ SCHEMA = {
             "score": {"type": "INTEGER"},
             "category": {"type": "STRING"},
             "hook": {"type": "STRING"},
+            "hook_options": {"type": "ARRAY", "items": {"type": "STRING"}},
             "title": {"type": "STRING"},
             "description": {"type": "STRING"},
             "hashtags": {"type": "ARRAY", "items": {"type": "STRING"}},
@@ -58,6 +59,7 @@ Rules:
 - Skip weak moments. Fewer strong clips beat many weak ones. Return [] if nothing is worth clipping.
 - score: 0-100, how likely a stranger keeps watching. Be honest; most clips are 50-80.
 - hook: at most 5 words, ALL CAPS, shown as big text on the video. Curiosity, but true to what happens.
+- hook_options: provide 4 additional distinct hook alternatives (5 total including hook). Each must be short, specific to this moment, and truthful. Vary the angle: curiosity, suspense, funny reaction, or the unexpected detail. Do not repeat the same wording or invent stakes. If only one honest hook fits, return fewer alternatives.
 - title: at most 70 characters, for the post.
 - description: one or two sentences.
 - hashtags: 5 tags without the # sign.
@@ -129,10 +131,19 @@ def _tidy(c, s, e, game=None):
         if t and t.lower() not in {x.lower() for x in tags}:
             tags.append(t)
     words = c.get("highlight_words") if isinstance(c.get("highlight_words"), list) else []
+    primary_hook = roman.to_roman(_text(c.get("hook"), 60)).upper()
+    raw_hooks = c.get("hook_options") if isinstance(c.get("hook_options"), list) else []
+    hook_options = []
+    for candidate in [primary_hook] + [roman.to_roman(_text(h, 60)).upper() for h in raw_hooks[:8]]:
+        candidate = re.sub(r"\s+", " ", candidate).strip()
+        if candidate and candidate not in hook_options:
+            hook_options.append(candidate)
+        if len(hook_options) >= 5:
+            break
     return {
         "start": s, "end": e, "score": max(0, min(100, int(_num(c.get("score"))))),
         "category": cat if cat in CATEGORIES else "other",
-        "hook": roman.to_roman(_text(c.get("hook"), 60)).upper(), "title": roman.to_roman(_text(c.get("title"), 100)),
+        "hook": primary_hook, "hook_options": hook_options, "title": roman.to_roman(_text(c.get("title"), 100)),
         "description": roman.to_roman(_text(c.get("description"), 300)),
         "hashtags": [t for t in tags if t][:8],
         "highlight_words": [roman.to_roman(_text(h, 30)) for h in words][:8],
@@ -255,6 +266,7 @@ def fallback_by_loudness(db, words, n, max_len, duration):
             continue
         picks.append({"start": s, "end": e, "score": 50, "category": "other", "hook": "WAIT FOR IT",
                       "title": "Loud moment", "description": "", "hashtags": [], "highlight_words": [],
+                      "hook_options": ["THE LOUD MOMENT"],
                       "reason": "Picked by loudness because the AI was unavailable."})
         if len(picks) >= n:
             break
