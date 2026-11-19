@@ -60,6 +60,7 @@ def main() -> int:
                 ("captions never overlap, stuck clips, sentence endings", ["tests/test_stuck.py"]),
                 ("ad breaks and frozen screens", ["tests/test_static.py"]),
                 ("answers that are not quite right", ["tests/test_answer.py"]),
+                ("evidence-based viral clip ranking", ["tests/test_viral.py"]),
                 ("knowing which game a stream is", ["tests/test_games.py"]),
                 ("finding the facecam in a gaming stream", ["tests/test_facecam.py"]),
                 ("fresh installs: ffmpeg, the speech model, AI errors", ["tests/test_tools.py"]),
