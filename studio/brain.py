@@ -372,32 +372,36 @@ def describe(text, title="", uploader="", game=None, timeout=None):
 
 
 
-def refine_hooks_with_frame(clip, jpeg: bytes, transcript: str, game=None, timeout=None):
-    """Use one sampled video frame to add visual context and improve hook options.
+def refine_hooks_with_frames(clip, frames: list[tuple[float, bytes]], transcript: str, game=None, timeout=None):
+    """Compare ordered frames across a candidate clip and refine its visual context and hooks.
 
-    This is a single-frame assist, not continuous video understanding. If the configured model cannot
-    inspect images, the existing transcript-based hooks are left untouched.
+    Frames are sparse samples, not every decoded frame. The prompt explicitly asks the model
+    to distinguish observed facts from inferred motion and to reason about sequence and payoff.
     """
-    if not jpeg:
+    frames = [(float(t), data) for t, data in (frames or []) if data][:8]
+    if not frames:
         return 0
+    sequence = "\n".join(f"Frame {i + 1} at clip time +{t:.1f}s" for i, (t, _) in enumerate(frames))
     prompt = (
-        "You are improving short-form stream clip hooks. Inspect this sampled frame and the transcript. "
-        "Do not assume motion or events that a single frame cannot prove. Return one JSON object with "
-        "visual_context (one concise factual sentence) and hook_options (up to five short, truthful hooks, "
-        "maximum five words each, all caps). Hooks must reflect both the visible context and the spoken "
-        "moment where possible. Never invent a win, loss, danger, prize, or reaction.\n"
-        f"Game: {_safe(game, 60) or 'unknown'}\n"
-        f"Transcript: {_safe(transcript, 2500)}\n"
-        f"Current hook: {_safe(clip.get('hook'), 80)}"
+        "You are a careful temporal video analyst for short-form gaming streams. These are ordered "
+        "frames sampled from ONE clip, not unrelated screenshots. Compare what changes between frames; "
+        "describe only visible evidence. Do not claim continuous motion between sparse samples. Identify "
+        "the setup, visible event, and aftermath when supported. Return JSON with visual_context (one "
+        "concise sentence), event_summary (one sentence), and hook_options (up to five short truthful "
+        "hooks, maximum five words each, all caps). Hooks should be specific, curiosity-led, and reflect "
+        "the actual sequence plus transcript. Never invent a win, loss, danger, prize, or reaction.\n"
+        f"Game: {_safe(game, 60) or 'unknown'}\nTranscript: {_safe(transcript, 2500)}\n"
+        f"Current hook: {_safe(clip.get('hook'), 80)}\nFrame sequence:\n{sequence}"
     )
     try:
-        answer, sent, wrote = ai.see(prompt, jpeg, timeout)
+        answer, sent, wrote = ai.see_many(prompt, [data for _, data in frames], timeout)
         if not answer:
             return 0
-        usage.record(sent, wrote, "Live: visual hook assist")
+        usage.record(sent, wrote, "Live: multi-frame visual analysis")
         match = re.search(r"\{.*\}", answer, re.S)
         data = json.loads(match.group(0)) if match else {}
         context = _text(data.get("visual_context"), 180)
+        summary = _text(data.get("event_summary"), 220)
         hooks = data.get("hook_options") if isinstance(data.get("hook_options"), list) else []
         cleaned = []
         for value in [clip.get("hook", "")] + hooks:
@@ -409,12 +413,19 @@ def refine_hooks_with_frame(clip, jpeg: bytes, transcript: str, game=None, timeo
                 break
         if context:
             clip["visual_context"] = context
+        if summary:
+            clip["visual_event"] = summary
         if cleaned:
             clip["hook_options"] = cleaned
             clip["hook"] = cleaned[0]
         return sent + wrote
-    except Exception:  # noqa: BLE001 - vision is an optional enhancement, never a reason to lose a clip
+    except Exception:  # noqa: BLE001 - vision is optional; never lose a clip because it failed
         return 0
+
+
+def refine_hooks_with_frame(clip, jpeg: bytes, transcript: str, game=None, timeout=None):
+    """Backward-compatible one-frame wrapper."""
+    return refine_hooks_with_frames(clip, [(0.0, jpeg)] if jpeg else [], transcript, game, timeout)
 
 
 # ---------------------------------------------------------------- live: two judges that never see each other's input
