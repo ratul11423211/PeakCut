@@ -444,23 +444,36 @@ class Session:
             self.last_spike = n
             self.spikes += 1
 
+    def _frames_between(self, start_second, end_second, count=5):
+        """Extract an ordered set of frames from the candidate's rolling-buffer interval."""
+        if end_second <= start_second:
+            return []
+        count = max(3, min(7, int(count)))
+        times = np.linspace(float(start_second), float(end_second), count)
+        frames = []
+        for t in times:
+            with self.lock:
+                segment = next((s for s in self.segments if s[1] <= t <= s[2] and s[0].exists()), None)
+            if not segment:
+                continue
+            path, seg_start, _seg_end = segment
+            relative = max(0.0, t - seg_start)
+            try:
+                proc = subprocess.run(
+                    ["ffmpeg", "-v", "error", "-ss", f"{relative:.2f}", "-i", str(path),
+                     "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "5",
+                     "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
+                    capture_output=True, timeout=10)
+                if proc.returncode == 0 and proc.stdout:
+                    frames.append((float(t - start_second), proc.stdout))
+            except Exception:  # noqa: BLE001 - a missed frame must not interrupt recording
+                continue
+        return frames
+
     def _frame_at(self, stream_second):
-        """Extract one JPEG from the rolling buffer at a stream timestamp."""
-        with self.lock:
-            segment = next((s for s in self.segments if s[1] <= stream_second <= s[2] and s[0].exists()), None)
-        if not segment:
-            return None
-        path, start, _end = segment
-        relative = max(0.0, stream_second - start)
-        try:
-            proc = subprocess.run(
-                ["ffmpeg", "-v", "error", "-ss", f"{relative:.2f}", "-i", str(path),
-                 "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "5",
-                 "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
-                capture_output=True, timeout=12)
-            return proc.stdout if proc.returncode == 0 and proc.stdout else None
-        except Exception:  # noqa: BLE001 - a missed frame must not interrupt recording
-            return None
+        """Backward-compatible single-frame extractor."""
+        frames = self._frames_between(stream_second, stream_second + 0.01, count=3)
+        return frames[0][1] if frames else None
 
     def _ai_check(self, window=None, why=None):
         """Judge 1 reads only the words. If it finds a moment, judge 2 reads only the loudness and chat activity
@@ -499,16 +512,14 @@ class Session:
         verdict["transcript"] = max((c["score"] for c in cands), default=0)
         if not keep:
             return self._verdict(verdict, "Words judge: nothing clip-worthy")
-        # A single frame near each candidate's loudest second gives the hook writer visual context.
-        # Recording and transcript analysis continue if frame extraction or vision fails.
+        # Compare a temporal sequence from setup through payoff, not just one peak frame.
+        # Sparse samples keep live latency/cost bounded; full-rate decoding is a separate offline mode.
         for candidate in keep:
-            a, b = max(0, int(candidate["start"])), min(len(self.db), int(candidate["end"]) + 1)
-            peak = max(range(a, b), key=lambda i: self.db[i]) if b > a else int(candidate["start"])
-            frame = self._frame_at(float(peak))
-            if frame:
+            frames = self._frames_between(candidate["start"], candidate["end"], count=5)
+            if frames:
                 words_text = " ".join(w["w"] for w in win if candidate["start"] <= w["s"] <= candidate["end"])
-                spent = brain.refine_hooks_with_frame(candidate, frame, words_text, self._game(),
-                                                       timeout=config.LIVE_AI_TIMEOUT)
+                spent = brain.refine_hooks_with_frames(candidate, frames, words_text, self._game(),
+                                                        timeout=config.LIVE_AI_TIMEOUT)
                 self.tokens += spent
         z = brain.loud_zscore(np.array(self.db, dtype=np.float32))
         lo, hi = int(ws), int(now) + 1
