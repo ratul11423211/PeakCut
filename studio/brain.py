@@ -21,6 +21,7 @@ SCHEMA = {
             "score": {"type": "INTEGER"},
             "category": {"type": "STRING"},
             "hook": {"type": "STRING"},
+            "hook_options": {"type": "ARRAY", "items": {"type": "STRING"}},
             "title": {"type": "STRING"},
             "description": {"type": "STRING"},
             "hashtags": {"type": "ARRAY", "items": {"type": "STRING"}},
@@ -58,6 +59,7 @@ Rules:
 - Skip weak moments. Fewer strong clips beat many weak ones. Return [] if nothing is worth clipping.
 - score: 0-100, how likely a stranger keeps watching. Be honest; most clips are 50-80.
 - hook: at most 5 words, ALL CAPS, shown as big text on the video. Curiosity, but true to what happens.
+- hook_options: provide 4 additional distinct hook alternatives (5 total including hook). Each must be short, specific to this moment, and truthful. Vary the angle: curiosity, suspense, funny reaction, or the unexpected detail. Do not repeat the same wording or invent stakes. If only one honest hook fits, return fewer alternatives.
 - title: at most 70 characters, for the post.
 - description: one or two sentences.
 - hashtags: 5 tags without the # sign.
@@ -129,10 +131,19 @@ def _tidy(c, s, e, game=None):
         if t and t.lower() not in {x.lower() for x in tags}:
             tags.append(t)
     words = c.get("highlight_words") if isinstance(c.get("highlight_words"), list) else []
+    primary_hook = roman.to_roman(_text(c.get("hook"), 60)).upper()
+    raw_hooks = c.get("hook_options") if isinstance(c.get("hook_options"), list) else []
+    hook_options = []
+    for candidate in [primary_hook] + [roman.to_roman(_text(h, 60)).upper() for h in raw_hooks[:8]]:
+        candidate = re.sub(r"\s+", " ", candidate).strip()
+        if candidate and candidate not in hook_options:
+            hook_options.append(candidate)
+        if len(hook_options) >= 5:
+            break
     return {
         "start": s, "end": e, "score": max(0, min(100, int(_num(c.get("score"))))),
         "category": cat if cat in CATEGORIES else "other",
-        "hook": roman.to_roman(_text(c.get("hook"), 60)).upper(), "title": roman.to_roman(_text(c.get("title"), 100)),
+        "hook": primary_hook, "hook_options": hook_options, "title": roman.to_roman(_text(c.get("title"), 100)),
         "description": roman.to_roman(_text(c.get("description"), 300)),
         "hashtags": [t for t in tags if t][:8],
         "highlight_words": [roman.to_roman(_text(h, 30)) for h in words][:8],
@@ -255,6 +266,7 @@ def fallback_by_loudness(db, words, n, max_len, duration):
             continue
         picks.append({"start": s, "end": e, "score": 50, "category": "other", "hook": "WAIT FOR IT",
                       "title": "Loud moment", "description": "", "hashtags": [], "highlight_words": [],
+                      "hook_options": ["THE LOUD MOMENT"],
                       "reason": "Picked by loudness because the AI was unavailable."})
         if len(picks) >= n:
             break
@@ -357,6 +369,63 @@ def describe(text, title="", uploader="", game=None, timeout=None):
         return c
     except Exception:  # noqa: BLE001
         return blank
+
+
+
+def refine_hooks_with_frames(clip, frames: list[tuple[float, bytes]], transcript: str, game=None, timeout=None):
+    """Compare ordered frames across a candidate clip and refine its visual context and hooks.
+
+    Frames are sparse samples, not every decoded frame. The prompt explicitly asks the model
+    to distinguish observed facts from inferred motion and to reason about sequence and payoff.
+    """
+    frames = [(float(t), data) for t, data in (frames or []) if data][:8]
+    if not frames:
+        return 0
+    sequence = "\n".join(f"Frame {i + 1} at clip time +{t:.1f}s" for i, (t, _) in enumerate(frames))
+    prompt = (
+        "You are a careful temporal video analyst for short-form gaming streams. These are ordered "
+        "frames sampled from ONE clip, not unrelated screenshots. Compare what changes between frames; "
+        "describe only visible evidence. Do not claim continuous motion between sparse samples. Identify "
+        "the setup, visible event, and aftermath when supported. Return JSON with visual_context (one "
+        "concise sentence), event_summary (one sentence), and hook_options (up to five short truthful "
+        "hooks, maximum five words each, all caps). Hooks should be specific, curiosity-led, and reflect "
+        "the actual sequence plus transcript. Never invent a win, loss, danger, prize, or reaction.\n"
+        f"Game: {_safe(game, 60) or 'unknown'}\nTranscript: {_safe(transcript, 2500)}\n"
+        f"Current hook: {_safe(clip.get('hook'), 80)}\nFrame sequence:\n{sequence}"
+    )
+    try:
+        answer, sent, wrote = ai.see_many(prompt, [data for _, data in frames], timeout)
+        if not answer:
+            return 0
+        usage.record(sent, wrote, "Live: multi-frame visual analysis")
+        match = re.search(r"\{.*\}", answer, re.S)
+        data = json.loads(match.group(0)) if match else {}
+        context = _text(data.get("visual_context"), 180)
+        summary = _text(data.get("event_summary"), 220)
+        hooks = data.get("hook_options") if isinstance(data.get("hook_options"), list) else []
+        cleaned = []
+        for value in [clip.get("hook", "")] + hooks:
+            hook = roman.to_roman(_text(value, 60)).upper()
+            hook = re.sub(r"\s+", " ", hook).strip()
+            if hook and hook not in cleaned:
+                cleaned.append(hook)
+            if len(cleaned) == 5:
+                break
+        if context:
+            clip["visual_context"] = context
+        if summary:
+            clip["visual_event"] = summary
+        if cleaned:
+            clip["hook_options"] = cleaned
+            clip["hook"] = cleaned[0]
+        return sent + wrote
+    except Exception:  # noqa: BLE001 - vision is optional; never lose a clip because it failed
+        return 0
+
+
+def refine_hooks_with_frame(clip, jpeg: bytes, transcript: str, game=None, timeout=None):
+    """Backward-compatible one-frame wrapper."""
+    return refine_hooks_with_frames(clip, [(0.0, jpeg)] if jpeg else [], transcript, game, timeout)
 
 
 # ---------------------------------------------------------------- live: two judges that never see each other's input

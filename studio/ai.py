@@ -302,20 +302,26 @@ def call(model: str, prompt: str, schema: dict, timeout: float | None = None):
 
 
 def see(prompt: str, image: bytes, timeout: float | None = None) -> tuple[str, int, int]:
-    """Ask one model about one picture: (the answer as text, tokens in, tokens out).
+    """Ask one model about one picture."""
+    return see_many(prompt, [image], timeout)
 
-    Nothing is broken by a service that cannot look at pictures, or a model that is only text: the answer
-    comes back empty, or says something the caller does not understand, and the caller carries on without
-    it. The picture is a JPEG, passed as base64 inside the ordinary message."""
-    if not ready() or not image or not models():
+
+def see_many(prompt: str, images: list[bytes], timeout: float | None = None) -> tuple[str, int, int]:
+    """Ask one vision model to compare an ordered sequence of JPEG frames in one request.
+
+    The frame order is preserved. This enables temporal context without pretending that a
+    sparse sample is continuous video. Unsupported vision models fail softly at the caller.
+    """
+    images = [x for x in (images or []) if x][:8]
+    if not ready() or not images or not models():
         return "", 0, 0
     model = models()[0]
-    b64 = base64.b64encode(image).decode()
     how = PROVIDERS[provider()][2]
     if how == "gemini":
-        body = {"contents": [{"role": "user", "parts": [
-            {"text": prompt},
-            {"inline_data": {"mimeType": "image/jpeg", "data": b64}}]}]}
+        parts = [{"text": prompt}]
+        parts.extend({"inline_data": {"mimeType": "image/jpeg", "data": base64.b64encode(x).decode()}}
+                     for x in images)
+        body = {"contents": [{"role": "user", "parts": parts}]}
         r = httpx.post(f"{base_url()}/{model}:generateContent", json=body,
                        headers={"x-goog-api-key": key()}, timeout=timeout or 120)
         if r.status_code != 200:
@@ -326,9 +332,11 @@ def see(prompt: str, image: bytes, timeout: float | None = None) -> tuple[str, i
         sent = int(u.get("promptTokenCount") or 0)
         return text, sent, max(0, int(u.get("totalTokenCount") or 0) - sent)
     if how == "anthropic":
-        body = {"model": model, "max_tokens": 300, "messages": [{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
-            {"type": "text", "text": prompt}]}]}
+        content = [{"type": "text", "text": prompt}]
+        for x in images:
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                        "data": base64.b64encode(x).decode()}})
+        body = {"model": model, "max_tokens": 500, "messages": [{"role": "user", "content": content}]}
         r = httpx.post(f"{base_url()}/messages", json=body, timeout=timeout or 120,
                        headers={"x-api-key": key(), "anthropic-version": "2023-06-01"})
         if r.status_code != 200:
@@ -337,18 +345,18 @@ def see(prompt: str, image: bytes, timeout: float | None = None) -> tuple[str, i
         text = "".join(p.get("text", "") for p in data.get("content") or [] if p.get("type") == "text")
         u = data.get("usage") or {}
         return text, int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0)
+    content = [{"type": "text", "text": prompt}]
+    content.extend({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(x).decode()}}
+                   for x in images)
     headers = {"Authorization": f"Bearer {key()}"} if key() else {}
-    body = {"model": model, "stream": False, "messages": [{"role": "user", "content": [
-        {"type": "text", "text": prompt},
-        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}}]}]}
+    body = {"model": model, "stream": False, "messages": [{"role": "user", "content": content}]}
     r = httpx.post(f"{base_url()}/chat/completions", json=body, headers=headers, timeout=timeout or 120)
     if r.status_code != 200:
         _fail(r, model)
     data = _openai_body(r)
-    text = (data["choices"][0]["message"].get("content") or "")
+    text = data["choices"][0]["message"].get("content") or ""
     u = data.get("usage") or {}
     return text, int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
-
 
 def _gemini(model, prompt, schema, timeout=None):
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
