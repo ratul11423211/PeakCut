@@ -448,7 +448,10 @@ class Session:
         """Extract an ordered set of frames from the candidate's rolling-buffer interval."""
         if end_second <= start_second:
             return []
-        count = max(3, min(7, int(count)))
+        # Vision providers currently accept at most eight images per request. Use all eight
+        # slots in the deep candidate pass so setup, transitions, peak action and aftermath
+        # have a better chance of being represented in temporal order.
+        count = max(3, min(8, int(count)))
         times = np.linspace(float(start_second), float(end_second), count)
         frames = []
         for t in times:
@@ -515,7 +518,10 @@ class Session:
         # Compare a temporal sequence from setup through payoff, not just one peak frame.
         # Sparse samples keep live latency/cost bounded; full-rate decoding is a separate offline mode.
         for candidate in keep:
-            frames = self._frames_between(candidate["start"], candidate["end"], count=5)
+            # Deep visual pass: sample the entire candidate interval at eight ordered
+            # points. This is not a claim of per-frame AI review; it gives the vision model
+            # more temporal evidence while keeping live latency and API payload bounded.
+            frames = self._frames_between(candidate["start"], candidate["end"], count=8)
             if frames:
                 words_text = " ".join(w["w"] for w in win if candidate["start"] <= w["s"] <= candidate["end"])
                 spent = brain.refine_hooks_with_frames(candidate, frames, words_text, self._game(),
